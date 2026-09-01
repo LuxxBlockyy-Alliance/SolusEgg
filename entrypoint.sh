@@ -5,6 +5,48 @@ RESET='\033[0m'
 cd /home/container || exit 1
 SELECTION_FILE="/home/container/.selected_minecraft"
 
+select_java() {
+    local mc_version="$1"
+    local requested_version="${JAVA_VERSION:-auto}"
+    local selected_version
+
+    if [ "$requested_version" != "auto" ]; then
+        selected_version="$requested_version"
+    elif [[ "$mc_version" =~ ^([0-9]+)\.([0-9]+)(\.([0-9]+))? ]]; then
+        local major="${BASH_REMATCH[1]}"
+        local minor="${BASH_REMATCH[2]}"
+        local patch="${BASH_REMATCH[4]:-0}"
+
+        if (( major >= 26 )); then
+            selected_version=25
+        elif (( major == 1 && (minor > 20 || (minor == 20 && patch >= 5)) )); then
+            selected_version=21
+        elif (( major == 1 && minor >= 17 )); then
+            selected_version=17
+        else
+            selected_version=8
+        fi
+    else
+        # New snapshots do not always use the release-number format.
+        selected_version=25
+    fi
+
+    case "$selected_version" in
+        8) export JAVA_HOME="$JAVA8_HOME" ;;
+        17) export JAVA_HOME="$JAVA17_HOME" ;;
+        21) export JAVA_HOME="$JAVA21_HOME" ;;
+        25) export JAVA_HOME="$JAVA25_HOME" ;;
+        *)
+            echo "Unsupported JAVA_VERSION '$selected_version'. Use auto, 8, 17, 21 or 25."
+            exit 1
+            ;;
+    esac
+
+    export PATH="$JAVA_HOME/bin:$(echo "$PATH" | sed -E 's#(^|:)/opt/java(8|17|21|25)/bin(:|$)#\1#g')"
+    echo "Using Java $selected_version for Minecraft $mc_version"
+    java -version
+}
+
 header() {
     clear
     echo -e "
@@ -136,6 +178,7 @@ install_forge() {
     MC_VERSION="$1"
     FORGE_VERSION="$2"
     echo "Installing Forge ${MC_VERSION}-${FORGE_VERSION}"
+    select_java "$MC_VERSION"
     DOWNLOAD_URL="https://maven.minecraftforge.net/net/minecraftforge/forge/${MC_VERSION}-${FORGE_VERSION}/forge-${MC_VERSION}-${FORGE_VERSION}-installer.jar"
     download_file "${DOWNLOAD_URL}" "forge-installer.jar"
     java -jar forge-installer.jar --installServer
@@ -161,7 +204,9 @@ print_neoforge_versions_new() {
 
 install_neoforge() {
     NEOFORGE_VERSION="$1"
+    MC_VERSION="$2"
     echo "Installing NeoForge ${NEOFORGE_VERSION}"
+    select_java "$MC_VERSION"
     DOWNLOAD_URL="https://maven.neoforged.net/releases/net/neoforged/neoforge/${NEOFORGE_VERSION}/neoforge-${NEOFORGE_VERSION}-installer.jar"
     download_file "${DOWNLOAD_URL}" "neoforge-installer.jar"
     java -jar neoforge-installer.jar --installServer
@@ -274,7 +319,7 @@ menu_modded() {
             read -r -p "Please choose a NeoForge version: " NEOFORGE_VERSION
             if ! print_neoforge_versions_new "$MC_VERSION" | grep -wq "$NEOFORGE_VERSION"; then echo "Invalid NeoForge version selected!"; exit 1; fi
             eula_check
-            install_neoforge "$NEOFORGE_VERSION"
+            install_neoforge "$NEOFORGE_VERSION" "$MC_VERSION"
             save_selection "Modded" "NeoForge" "$MC_VERSION" "$NEOFORGE_VERSION"
             exit 0
             ;;
@@ -373,6 +418,8 @@ menu_main() {
 }
 
 if [ -f "$SELECTION_FILE" ]; then
+    IFS=: read -r _ _ SAVED_MC_VERSION _ < "$SELECTION_FILE"
+    select_java "$SAVED_MC_VERSION"
     ./run.sh
     exit 0
 else
